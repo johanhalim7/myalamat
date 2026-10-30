@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { AddressData, AIAddressAnalysis, NearbyPlace, CommunityRTRWContribution } from '@/types/address';
 import { formatSingleLineAddress } from '@/utils/addressParser';
 
+export async function GET() {
+  return NextResponse.json({
+    hasServerKey: !!process.env.GEMINI_API_KEY,
+  });
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -24,6 +30,7 @@ export async function POST(request: NextRequest) {
     }
 
     const effectiveKey = apiKey || process.env.GEMINI_API_KEY || '';
+    let geminiFailureReason: string | undefined;
 
     // If Gemini key is available, call Gemini API
     if (effectiveKey) {
@@ -32,13 +39,21 @@ export async function POST(request: NextRequest) {
         if (geminiResult) {
           return NextResponse.json(geminiResult);
         }
-      } catch (geminiError) {
-        console.warn('Gemini API call failed, falling back to heuristic engine:', geminiError);
+      } catch (geminiError: unknown) {
+        const errMsg = geminiError instanceof Error ? geminiError.message : String(geminiError);
+        console.warn('Gemini API call failed, falling back to heuristic engine:', errMsg);
+        geminiFailureReason = errMsg;
       }
     }
 
     // Fallback: Built-in Indonesian Administrative & Postal Intelligence Engine
-    const heuristicResult = runHeuristicEngine(address, nearbyPlaces, communityRTRW, userNotes);
+    const heuristicResult = runHeuristicEngine(
+      address,
+      nearbyPlaces,
+      communityRTRW,
+      userNotes,
+      geminiFailureReason
+    );
     return NextResponse.json(heuristicResult);
   } catch (err: unknown) {
     console.error('AI analyze error:', err);
@@ -54,7 +69,8 @@ function runHeuristicEngine(
   address: AddressData,
   nearbyPlaces: NearbyPlace[],
   communityRTRW: CommunityRTRWContribution[],
-  userNotes: string
+  userNotes: string,
+  geminiError?: string
 ): AIAddressAnalysis {
   const jalan = address.jalan;
   let rt = address.rt;
@@ -160,6 +176,8 @@ function runHeuristicEngine(
       'Gunakan format ini untuk memesan paket di Shopee atau Tokopedia. Pastikan memilih Kecamatan terlebih dahulu saat memasukkan alamat baru.',
     hierarchyVerified: true,
     detectedFromPOIs,
+    geminiError,
+    hasServerKey: !!process.env.GEMINI_API_KEY,
   };
 }
 
@@ -215,7 +233,7 @@ Instruksi Khusus:
 
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(
-      key
+      key.trim()
     )}`,
     {
       method: 'POST',
@@ -228,14 +246,24 @@ Instruksi Khusus:
   );
 
   if (!response.ok) {
-    throw new Error(`Gemini API error: ${response.status} ${response.statusText}`);
+    const errorJson = (await response.json().catch(() => null)) as {
+      error?: { message?: string; status?: string };
+    } | null;
+    const detail = errorJson?.error?.message || response.statusText || `HTTP ${response.status}`;
+    throw new Error(`Google Gemini Error (${response.status}): ${detail}`);
   }
 
   const json = await response.json();
   const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!rawText) return null;
 
-  const parsed = JSON.parse(rawText);
+  // Clean possible markdown code fence (```json ... ```)
+  const cleanedText = rawText
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+
+  const parsed = JSON.parse(cleanedText);
 
   const updatedObj: AddressData = {
     ...address,
@@ -266,5 +294,6 @@ Instruksi Khusus:
     explanation: parsed.explanation || 'Diverifikasi langsung menggunakan model Gemini AI.',
     deliveryAdvice: parsed.deliveryAdvice || 'Format telah disesuaikan untuk pengiriman ekspedisi.',
     hierarchyVerified: true,
+    hasServerKey: !!process.env.GEMINI_API_KEY,
   };
 }

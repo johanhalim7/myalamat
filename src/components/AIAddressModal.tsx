@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AddressData, AIAddressAnalysis, NearbyPlace, CommunityRTRWContribution } from '@/types/address';
-import { X, Sparkles, Brain, Check, Key, Loader2, Info } from 'lucide-react';
+import { X, Sparkles, Brain, Check, Key, Loader2, Info, AlertTriangle } from 'lucide-react';
 
 interface AIAddressModalProps {
   isOpen: boolean;
@@ -32,6 +32,16 @@ export default function AIAddressModal({
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<AIAddressAnalysis | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [hasServerKey, setHasServerKey] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      fetch('/api/ai-analyze')
+        .then((res) => res.json())
+        .then((data) => setHasServerKey(!!data.hasServerKey))
+        .catch(() => setHasServerKey(false));
+    }
+  }, [isOpen]);
 
   if (!isOpen || !address) return null;
 
@@ -150,19 +160,35 @@ export default function AIAddressModal({
           </div>
 
           {/* Optional Gemini API Key Section */}
-          <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-200 dark:border-slate-700">
+          <div className="p-3.5 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 flex items-center gap-1.5">
+              <span className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
                 <Key className="w-3.5 h-3.5 text-slate-400" />
-                Gemini API Key (Opsional)
+                Gemini API Key
               </span>
               <button
                 type="button"
                 onClick={() => setShowKeyInput(!showKeyInput)}
-                className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline font-semibold"
+                className="text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline font-semibold"
               >
-                {showKeyInput ? 'Sembunyikan' : apiKey ? 'Ubah Key' : 'Gunakan API Sendiri'}
+                {showKeyInput ? 'Sembunyikan' : apiKey ? 'Ubah Key Pribadi' : 'Input Key Manual'}
               </button>
+            </div>
+
+            {/* Server key status info */}
+            <div className="flex items-center justify-between text-[11px] pt-1">
+              <span className="text-slate-500">Status Key di Vercel:</span>
+              {hasServerKey === null ? (
+                <span className="text-slate-400">Memeriksa...</span>
+              ) : hasServerKey ? (
+                <span className="text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
+                  ✓ Terdeteksi di Vercel
+                </span>
+              ) : (
+                <span className="text-amber-600 dark:text-amber-400 font-semibold bg-amber-50 dark:bg-amber-950/40 px-2 py-0.5 rounded-full border border-amber-200 dark:border-amber-800">
+                  Belum aktif (Perlu Redeploy Vercel)
+                </span>
+              )}
             </div>
 
             {showKeyInput && (
@@ -175,7 +201,7 @@ export default function AIAddressModal({
                   className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-100 text-xs font-mono"
                 />
                 <p className="text-[10px] text-slate-400">
-                  Jika dikosongkan, sistem tetap berjalan menggunakan Built-in Postal Intelligence Engine secara instan dan bebas biaya.
+                  Anda bisa langsung paste Gemini API Key di sini untuk langsung menggunakan Gemini AI tanpa harus menunggu redeploy di Vercel.
                 </p>
               </div>
             )}
@@ -209,10 +235,31 @@ export default function AIAddressModal({
                   <Sparkles className="w-3 h-3" />
                   Skor Akurasi: {analysisResult.confidenceScore}%
                 </span>
-                <span className="text-[10px] text-slate-500 dark:text-slate-400">
-                  Sumber: {analysisResult.aiSource === 'gemini' ? 'Gemini 1.5 Flash' : 'Built-in Postal AI'}
+                <span className="text-[10px] text-slate-600 dark:text-slate-300 font-medium">
+                  Sumber:{' '}
+                  {analysisResult.aiSource === 'gemini' ? (
+                    <b className="text-violet-600 dark:text-violet-400">Gemini 1.5 Flash ✨</b>
+                  ) : (
+                    <b className="text-blue-600 dark:text-blue-400">Built-in Postal AI 🏛️</b>
+                  )}
                 </span>
               </div>
+
+              {/* Gemini Error Callout if occurred */}
+              {analysisResult.geminiError && (
+                <div className="p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-2xl text-amber-900 dark:text-amber-200 text-xs space-y-1.5">
+                  <div className="flex items-center gap-1.5 font-bold text-amber-800 dark:text-amber-300">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>Info Panggilan Gemini API:</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed break-words font-mono bg-white/70 dark:bg-black/30 p-2 rounded-lg border border-amber-200 dark:border-amber-900">
+                    {analysisResult.geminiError}
+                  </p>
+                  <p className="text-[10px] text-amber-700 dark:text-amber-300">
+                    Sistem otomatis mengalihkan analisis ke <b>Built-in Postal AI</b> agar perapihan alamat Anda tetap berhasil 100%.
+                  </p>
+                </div>
+              )}
 
               {/* Formatted address */}
               <div className="p-3 bg-white dark:bg-slate-900 rounded-2xl border border-indigo-100 dark:border-indigo-900 text-xs text-slate-900 dark:text-slate-100 font-bold leading-relaxed">

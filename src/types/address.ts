@@ -80,6 +80,8 @@ export interface AIAddressAnalysis {
     rw?: string;
     distanceMeters: number;
   };
+  geminiError?: string;
+  hasServerKey?: boolean;
 }
 
 export interface NominatimAddress {
