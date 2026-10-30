@@ -26,12 +26,14 @@ export async function POST(request: NextRequest) {
       communityRTRW = [],
       userNotes = '',
       apiKey = '',
+      engine = 'smart',
     } = body as {
       address: AddressData;
       nearbyPlaces?: NearbyPlace[];
       communityRTRW?: CommunityRTRWContribution[];
       userNotes?: string;
       apiKey?: string;
+      engine?: 'smart' | 'gemini';
     };
 
     if (!address) {
@@ -39,14 +41,19 @@ export async function POST(request: NextRequest) {
     }
 
     // 1. Fetch official Kemendagri village candidates for this district
-    const officialData = await getOfficialVillagesForDistrict(
-      address.kecamatan,
-      address.kota,
-      address.provinsi,
-      address.latitude,
-      address.longitude
-    );
-    const officialCandidates = officialData?.villages || [];
+    let officialCandidates: OfficialVillageCandidate[] = [];
+    try {
+      const officialData = await getOfficialVillagesForDistrict(
+        address.kecamatan,
+        address.kota,
+        address.provinsi,
+        address.latitude,
+        address.longitude
+      );
+      officialCandidates = officialData?.villages || [];
+    } catch (kemendagriErr) {
+      console.warn('Failed to load official Kemendagri villages:', kemendagriErr);
+    }
 
     const effectiveKey = apiKey || process.env.GEMINI_API_KEY || '';
     let refereeResult: {
@@ -56,8 +63,11 @@ export async function POST(request: NextRequest) {
       source: 'gemini' | 'smart_referee';
     } | null = null;
 
-    // 2. If Gemini Key is present, use Gemini in Referee (Wasit) Mode
-    if (effectiveKey && officialCandidates.length > 0) {
+    // 2. Only invoke Gemini if user specifically requested 'gemini' mode or provided apiKey
+    const shouldRunGemini =
+      (engine === 'gemini' || !!apiKey) && !!effectiveKey && officialCandidates.length > 0;
+
+    if (shouldRunGemini) {
       try {
         const geminiDecision = await callGeminiReferee(
           effectiveKey,
@@ -73,16 +83,17 @@ export async function POST(request: NextRequest) {
           };
         }
       } catch (geminiErr) {
-        console.warn('Gemini referee error, fallback to smart referee:', geminiErr);
+        console.warn('Gemini referee timed out or errored, fallback to smart referee:', geminiErr);
       }
     }
 
-    // 3. Fallback to Built-in Smart Kemendagri Referee
+    // 3. Fallback to Built-in Smart Kemendagri Referee (Instant, local, zero-hang)
     if (!refereeResult) {
       const smartDecision = runSmartReferee(
         officialCandidates,
         nearbyPlaces,
-        address.kecamatan
+        address.kecamatan,
+        address.kelurahan
       );
       refereeResult = {
         ...smartDecision,
@@ -153,59 +164,68 @@ Instruksi Wasit:
   "explanation": "Alasan singkat pemilihan desa berdasarkan jarak/fasilitas"
 }`;
 
-  const response = await fetch(
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent',
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-goog-api-key': key.trim(),
-      },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: 'application/json' },
-      }),
+  try {
+    const response = await fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent',
+      {
+        method: 'POST',
+        signal: AbortSignal.timeout(3500), // Strict 3.5s timeout!
+        headers: {
+          'Content-Type': 'application/json',
+          'X-goog-api-key': key.trim(),
+        },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: 'application/json' },
+        }),
+      }
+    );
+
+    if (!response.ok) return null;
+    const json = await response.json();
+    const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rawText) return null;
+
+    const cleaned = rawText
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim();
+    const parsed = JSON.parse(cleaned);
+
+    // Hard Whitelist Enforcement: must match one of the official Kemendagri candidates
+    const match = candidates.find(
+      (c) => c.name.toLowerCase() === (parsed.selectedVillage || '').toLowerCase().trim()
+    );
+
+    if (!match) {
+      // Hallucination outside Kemendagri list rejected!
+      return null;
     }
-  );
 
-  if (!response.ok) return null;
-  const json = await response.json();
-  const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!rawText) return null;
-
-  const cleaned = rawText
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/i, '')
-    .trim();
-  const parsed = JSON.parse(cleaned);
-
-  // Hard Whitelist Enforcement: must match one of the official Kemendagri candidates
-  const match = candidates.find(
-    (c) => c.name.toLowerCase() === (parsed.selectedVillage || '').toLowerCase().trim()
-  );
-
-  if (!match) {
-    // Hallucination outside Kemendagri list rejected!
+    return {
+      selectedVillage: match.name,
+      explanation: parsed.explanation || `Divalidasi dari daftar resmi Kemendagri oleh Wasit AI.`,
+      confidenceScore: parsed.confidenceScore || 95,
+    };
+  } catch (err) {
+    console.warn('Gemini referee network error/timeout:', err);
     return null;
   }
-
-  return {
-    selectedVillage: match.name,
-    explanation: parsed.explanation || `Divalidasi dari daftar resmi Kemendagri oleh Wasit AI.`,
-    confidenceScore: parsed.confidenceScore || 95,
-  };
 }
 
 function runSmartReferee(
   candidates: OfficialVillageCandidate[],
   nearbyPlaces: NearbyPlace[],
-  districtName: string
+  districtName: string,
+  fallbackVillage: string = ''
 ): { selectedVillage: string; explanation: string; confidenceScore: number } {
   if (candidates.length === 0) {
     return {
-      selectedVillage: '',
-      explanation: 'Tidak ditemukan data desa resmi untuk kecamatan ini.',
-      confidenceScore: 80,
+      selectedVillage: fallbackVillage || '',
+      explanation: fallbackVillage
+        ? `Menggunakan nama '${fallbackVillage}' dari data geocoding wilayah.`
+        : 'Wilayah terkonfirmasi di tingkat kecamatan.',
+      confidenceScore: 85,
     };
   }
 

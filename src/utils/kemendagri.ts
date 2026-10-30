@@ -114,10 +114,13 @@ export async function getOfficialVillagesForDistrict(
   }
 
   try {
-    // 3. Resolve province
+    // 3. Resolve province (with 2.5s timeout to prevent hanging)
     const provsRes = await fetch(
-      'https://emsifa.github.io/api-wilayah-indonesia/api/provinces.json',
-      { next: { revalidate: 86400 } }
+      'https://www.emsifa.com/api-wilayah-indonesia/api/provinces.json',
+      {
+        signal: AbortSignal.timeout(2500),
+        next: { revalidate: 86400 },
+      }
     );
     if (!provsRes.ok) return null;
     const provs = (await provsRes.json()) as EmsifaItem[];
@@ -136,8 +139,11 @@ export async function getOfficialVillagesForDistrict(
 
     // 4. Resolve regency
     const regRes = await fetch(
-      `https://emsifa.github.io/api-wilayah-indonesia/api/regencies/${targetProv.id}.json`,
-      { next: { revalidate: 86400 } }
+      `https://www.emsifa.com/api-wilayah-indonesia/api/regencies/${targetProv.id}.json`,
+      {
+        signal: AbortSignal.timeout(2500),
+        next: { revalidate: 86400 },
+      }
     );
     if (!regRes.ok) return null;
     const regencies = (await regRes.json()) as EmsifaItem[];
@@ -156,8 +162,11 @@ export async function getOfficialVillagesForDistrict(
 
     // 5. Resolve district
     const distRes = await fetch(
-      `https://emsifa.github.io/api-wilayah-indonesia/api/districts/${targetReg.id}.json`,
-      { next: { revalidate: 86400 } }
+      `https://www.emsifa.com/api-wilayah-indonesia/api/districts/${targetReg.id}.json`,
+      {
+        signal: AbortSignal.timeout(2500),
+        next: { revalidate: 86400 },
+      }
     );
     if (!distRes.ok) return null;
     const districts = (await distRes.json()) as EmsifaItem[];
@@ -171,58 +180,61 @@ export async function getOfficialVillagesForDistrict(
 
     // 6. Fetch official villages
     const villRes = await fetch(
-      `https://emsifa.github.io/api-wilayah-indonesia/api/villages/${targetDist.id}.json`,
-      { next: { revalidate: 86400 } }
+      `https://www.emsifa.com/api-wilayah-indonesia/api/villages/${targetDist.id}.json`,
+      {
+        signal: AbortSignal.timeout(2500),
+        next: { revalidate: 86400 },
+      }
     );
     if (!villRes.ok) return null;
     const rawVillages = (await villRes.json()) as EmsifaItem[];
 
     const cleanRegencyName = targetReg.name.replace(/^(kabupaten|kota)\s+/i, '');
 
-    // 7. Resolve coordinates for candidate villages
-    const candidateList = await Promise.all(
-      rawVillages.map(async (v) => {
-        const title = toTitleCase(v.name);
-        let dist: number | null = null;
-        let vLat: number | null = null;
-        let vLon: number | null = null;
+    // 7. Fast Candidate List with safe distance resolution (no parallel flood)
+    const candidateList = rawVillages.map((v) => ({
+      name: toTitleCase(v.name),
+      distanceMeters: null as number | null,
+      lat: null as number | null,
+      lon: null as number | null,
+      isNearest: false,
+    }));
 
-        if (userLat != null && userLon != null) {
+    // Optionally resolve distance for the first 2 candidates with strict timeout
+    if (userLat != null && userLon != null && candidateList.length > 0) {
+      const candidatesToResolve = candidateList.slice(0, 2);
+      await Promise.allSettled(
+        candidatesToResolve.map(async (c) => {
           try {
-            const q = `${title},+${cleanRegencyName}`;
+            const q = `${c.name}, ${toTitleCase(targetDist.name)}, ${cleanRegencyName}`;
             const searchRes = await fetch(
               `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(
                 q
               )}&limit=1`,
               {
                 headers: { 'User-Agent': 'AlamatKu-Web/1.0 (https://alamatku.app)' },
-                next: { revalidate: 86400 * 7 }, // cache 7 days
+                signal: AbortSignal.timeout(1500),
+                next: { revalidate: 86400 * 7 },
               }
             );
             if (searchRes.ok) {
               const resData = (await searchRes.json()) as Array<{ lat: string; lon: string }>;
               if (resData.length > 0) {
-                vLat = parseFloat(resData[0].lat);
-                vLon = parseFloat(resData[0].lon);
-                dist = getDistanceMeters(userLat, userLon, vLat, vLon);
+                const vLat = parseFloat(resData[0].lat);
+                const vLon = parseFloat(resData[0].lon);
+                c.lat = vLat;
+                c.lon = vLon;
+                c.distanceMeters = getDistanceMeters(userLat, userLon, vLat, vLon);
               }
             }
           } catch {
-            // ignore network error
+            // timeout or network error safely ignored
           }
-        }
+        })
+      );
+    }
 
-        return {
-          name: title,
-          distanceMeters: dist,
-          lat: vLat,
-          lon: vLon,
-          isNearest: false,
-        };
-      })
-    );
-
-    // Sort by distance ascending
+    // Sort by distance ascending if distances exist
     candidateList.sort((a, b) => {
       if (a.distanceMeters == null && b.distanceMeters == null) return 0;
       if (a.distanceMeters == null) return 1;
