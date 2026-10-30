@@ -228,53 +228,27 @@ export async function GET(request: NextRequest) {
       const minLat = (lat - delta).toFixed(5);
       const maxLat = (lat + delta).toFixed(5);
 
-      // Multi-anchor queries tailored to Indonesian settlements
-      const baseQueries = [
-        'sdn',
-        'smp',
-        'sma',
-        'madrasah',
-        'sekolah',
-        'puskesmas',
-        'klinik',
-        'apotek',
-        'masjid',
-        'mushola',
-        'kantor desa',
-        'balai desa',
-        'posyandu',
-        'pos ronda',
-        'pos kamling',
-        'balai rw',
-        'indomaret',
-        'alfamart',
-        'spbu',
-        'pasar',
-      ];
+      // Concise high-yield queries tailored to Indonesian settlements (avoids Nominatim 429 rate limit)
+      const baseQueries = ['sekolah', 'masjid', 'puskesmas', 'pos ronda', 'indomaret'];
 
-      // If district, regency, or village is known, add contextual high-confidence anchor queries
+      // If district or village is known, add contextual anchor queries
       const contextualQueries: string[] = [];
       if (district) {
         contextualQueries.push(`Puskesmas ${district}`);
-        contextualQueries.push(`Kecamatan ${district}`);
-        contextualQueries.push(`Masjid ${district}`);
         contextualQueries.push(`SDN ${district}`);
         if (regency) {
           contextualQueries.push(`Puskesmas ${district} ${regency}`);
         }
       }
       if (village) {
-        contextualQueries.push(`Kantor Desa ${village}`);
         contextualQueries.push(`Balai Desa ${village}`);
-        contextualQueries.push(`SDN ${village}`);
       }
 
       const combinedQueries = baseQueries.concat(contextualQueries);
       const allQueries = Array.from(new Set(combinedQueries));
 
-      // Run parallel queries with Promise.allSettled
+      // Run parallel queries with Promise.allSettled and strict timeout
       const searchPromises = allQueries.map(async (query) => {
-        // Omitting bounded=1 allows finding points in viewbox without exact-string-only boundary rejections
         const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(
           query
         )}&viewbox=${minLon},${maxLat},${maxLon},${minLat}&countrycodes=id&limit=4&addressdetails=1&accept-language=id`;
@@ -283,6 +257,7 @@ export async function GET(request: NextRequest) {
           headers: {
             'User-Agent': 'AlamatKu-Web/1.0 (https://alamatku.app)',
           },
+          signal: AbortSignal.timeout(3000),
           next: { revalidate: 600 },
         });
 

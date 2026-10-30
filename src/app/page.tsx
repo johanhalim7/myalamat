@@ -185,7 +185,12 @@ export default function HomePage() {
       setIsGeocoding(true);
       setErrorMessage(null);
       try {
-        const res = await fetch(`/api/reverse?lat=${lat}&lon=${lon}`);
+        let res = await fetch(`/api/reverse?lat=${lat}&lon=${lon}`);
+        if (!res.ok) {
+          // Automatic fast retry after 500ms in case of temporary rate limit or network glitch
+          await new Promise((r) => setTimeout(r, 500));
+          res = await fetch(`/api/reverse?lat=${lat}&lon=${lon}`);
+        }
         if (!res.ok) {
           throw new Error('Gagal menghubungi layanan geocoding.');
         }
