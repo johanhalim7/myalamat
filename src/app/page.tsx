@@ -239,7 +239,7 @@ export default function HomePage() {
     fetchAddressForCoords(DEFAULT_COORDS[0], DEFAULT_COORDS[1], null);
   }, [fetchAddressForCoords]);
 
-  // Geolocation Handler
+  // Geolocation Handler with Automatic Two-Tier Fallback
   const handleDetectLocation = () => {
     if (!navigator.geolocation) {
       setErrorMessage('Browser Anda tidak mendukung fitur pendeteksi lokasi (Geolocation).');
@@ -249,35 +249,58 @@ export default function HomePage() {
     setIsLocating(true);
     setErrorMessage(null);
 
+    const onLocationSuccess = (pos: GeolocationPosition) => {
+      const lat = pos.coords.latitude;
+      const lon = pos.coords.longitude;
+      const acc = pos.coords.accuracy;
+
+      setCoords([lat, lon]);
+      setAccuracy(acc);
+      setIsLocating(false);
+
+      fetchAddressForCoords(lat, lon, acc);
+    };
+
+    const onFinalLocationError = (err: GeolocationPositionError) => {
+      setIsLocating(false);
+      console.warn('Geolocation final error:', err);
+      let msg = 'Gagal mendeteksi lokasi otomatis.';
+      if (err.code === 1) {
+        msg = 'Izin lokasi tidak diberikan. Harap aktifkan izin lokasi di browser Anda atau gunakan kolom pencarian.';
+      } else if (err.code === 2) {
+        msg = 'Sinyal lokasi/GPS tidak tersedia saat ini. Coba geser pin di peta.';
+      } else if (err.code === 3) {
+        msg = 'Permintaan lokasi memakan waktu terlalu lama. Silakan coba kembali.';
+      }
+      setErrorMessage(msg);
+    };
+
+    // Attempt 1: High accuracy GPS with generous timeout (15s) and 60s cache
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const lat = pos.coords.latitude;
-        const lon = pos.coords.longitude;
-        const acc = pos.coords.accuracy;
-
-        setCoords([lat, lon]);
-        setAccuracy(acc);
-        setIsLocating(false);
-
-        fetchAddressForCoords(lat, lon, acc);
-      },
+      onLocationSuccess,
       (err) => {
-        setIsLocating(false);
-        console.warn('Geolocation error:', err);
-        let msg = 'Gagal mendeteksi lokasi otomatis.';
-        if (err.code === 1) {
-          msg = 'Izin lokasi tidak diberikan. Harap aktifkan izin lokasi di browser Anda atau gunakan kolom pencarian.';
-        } else if (err.code === 2) {
-          msg = 'Sinyal lokasi/GPS tidak tersedia saat ini. Coba geser pin di peta.';
-        } else if (err.code === 3) {
-          msg = 'Permintaan lokasi memakan waktu terlalu lama. Silakan coba kembali.';
+        // If timed out (3) or unavailable (2), automatically fallback to fast Wi-Fi / Cell network triangulation
+        if (err.code === 2 || err.code === 3) {
+          console.warn('High-accuracy GPS cold start timed out or unavailable, falling back to network geolocation...');
+          navigator.geolocation.getCurrentPosition(
+            onLocationSuccess,
+            onFinalLocationError,
+            {
+              enableHighAccuracy: false,
+              timeout: 10000,
+              maximumAge: 300000, // allow 5 minutes cached network position
+            }
+          );
+          return;
         }
-        setErrorMessage(msg);
+
+        // If permission denied (1), don't retry, show error directly
+        onFinalLocationError(err);
       },
       {
         enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 0,
+        timeout: 15000, // 15 seconds allows user to tap 'Allow' on permission dialog
+        maximumAge: 60000, // 1 minute cache avoids cold GPS restart
       }
     );
   };
