@@ -238,7 +238,7 @@ export default function AIAddressModal({
                 <span className="text-[10px] text-slate-600 dark:text-slate-300 font-medium">
                   Sumber:{' '}
                   {analysisResult.aiSource === 'gemini' ? (
-                    <b className="text-violet-600 dark:text-violet-400">Gemini 1.5 Flash ✨</b>
+                    <b className="text-violet-600 dark:text-violet-400">Gemini Flash ✨</b>
                   ) : (
                     <b className="text-blue-600 dark:text-blue-400">Built-in Postal AI 🏛️</b>
                   )}

@@ -231,29 +231,57 @@ Instruksi Khusus:
   "deliveryAdvice": string
 }`;
 
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(
-      key.trim()
-    )}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: 'application/json' },
-      }),
-    }
-  );
+  const candidateModels = ['gemini-flash-latest', 'gemini-1.5-flash', 'gemini-2.0-flash'];
+  let lastError: Error | null = null;
+  let json: { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> } | null = null;
 
-  if (!response.ok) {
-    const errorJson = (await response.json().catch(() => null)) as {
-      error?: { message?: string; status?: string };
-    } | null;
-    const detail = errorJson?.error?.message || response.statusText || `HTTP ${response.status}`;
-    throw new Error(`Google Gemini Error (${response.status}): ${detail}`);
+  for (const model of candidateModels) {
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-goog-api-key': key.trim(),
+          },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { responseMimeType: 'application/json' },
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const errorJson = (await response.json().catch(() => null)) as {
+          error?: { message?: string; status?: string };
+        } | null;
+        const detail = errorJson?.error?.message || response.statusText || `HTTP ${response.status}`;
+
+        if (response.status === 404) {
+          lastError = new Error(`Google Gemini Error (404): ${detail}`);
+          continue;
+        }
+
+        throw new Error(`Google Gemini Error (${response.status}): ${detail}`);
+      }
+
+      json = (await response.json()) as {
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      };
+      break;
+    } catch (err: unknown) {
+      if (err instanceof Error && err.message.includes('404')) {
+        continue;
+      }
+      throw err;
+    }
   }
 
-  const json = await response.json();
+  if (!json) {
+    if (lastError) throw lastError;
+    return null;
+  }
   const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!rawText) return null;
 
