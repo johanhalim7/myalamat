@@ -57,6 +57,7 @@ export interface NearbyPlace {
   longitude: number;
   distanceMeters: number;
   street?: string;
+  source?: 'google' | 'osm';
   detectedRTRW?: {
     rt?: string;
     rw?: string;

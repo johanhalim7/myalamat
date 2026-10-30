@@ -93,35 +93,46 @@ export default function HomePage() {
   }, []);
 
   // Fetch Nearby Places & Facilities (Schools, Mosques, Offices, RT/RW Anchors)
-  const fetchNearbyPlaces = useCallback(async (lat: number, lon: number) => {
-    try {
-      const res = await fetch(`/api/nearby-places?lat=${lat}&lon=${lon}`);
-      if (res.ok) {
-        const data = await res.json();
-        setNearbyPlaces(data.places || []);
-        setNearbySuggestedRTRW(data.suggestedRTRW || null);
+  const fetchNearbyPlaces = useCallback(
+    async (lat: number, lon: number, district?: string, regency?: string, village?: string) => {
+      try {
+        const params = new URLSearchParams({
+          lat: lat.toString(),
+          lon: lon.toString(),
+        });
+        if (district) params.set('district', district);
+        if (regency) params.set('regency', regency);
+        if (village) params.set('village', village);
 
-        // Auto-fill RT/RW if empty and high-confidence anchor nearby (<= 300m)
-        if (data.suggestedRTRW && (data.suggestedRTRW.distanceMeters ?? 999) <= 300) {
-          setAddress((prev) => {
-            if (!prev) return prev;
-            if (!prev.rt && !prev.rw) {
-              const updated: AddressData = {
-                ...prev,
-                rt: data.suggestedRTRW.rt || prev.rt,
-                rw: data.suggestedRTRW.rw || prev.rw,
-              };
-              updated.formattedAddress = formatSingleLineAddress(updated);
-              return updated;
-            }
-            return prev;
-          });
+        const res = await fetch(`/api/nearby-places?${params.toString()}`);
+        if (res.ok) {
+          const data = await res.json();
+          setNearbyPlaces(data.places || []);
+          setNearbySuggestedRTRW(data.suggestedRTRW || null);
+
+          // Auto-fill RT/RW if empty and high-confidence anchor nearby (<= 300m)
+          if (data.suggestedRTRW && (data.suggestedRTRW.distanceMeters ?? 999) <= 300) {
+            setAddress((prev) => {
+              if (!prev) return prev;
+              if (!prev.rt && !prev.rw) {
+                const updated: AddressData = {
+                  ...prev,
+                  rt: data.suggestedRTRW.rt || prev.rt,
+                  rw: data.suggestedRTRW.rw || prev.rw,
+                };
+                updated.formattedAddress = formatSingleLineAddress(updated);
+                return updated;
+              }
+              return prev;
+            });
+          }
         }
+      } catch (err) {
+        console.error('Error fetching nearby places:', err);
       }
-    } catch (err) {
-      console.error('Error fetching nearby places:', err);
-    }
-  }, []);
+    },
+    []
+  );
 
   // Fetch Official Kemendagri Villages for District
   const fetchOfficialVillages = useCallback(
@@ -184,7 +195,7 @@ export default function HomePage() {
 
         // Concurrently fetch community RT/RW, nearby facilities, and official Kemendagri villages
         fetchCommunityRTRW(lat, lon);
-        fetchNearbyPlaces(lat, lon);
+        fetchNearbyPlaces(lat, lon, parsed.kecamatan, parsed.kota, parsed.kelurahan);
         fetchOfficialVillages(parsed, lat, lon);
       } catch (err: unknown) {
         console.error('Geocoding error:', err);
