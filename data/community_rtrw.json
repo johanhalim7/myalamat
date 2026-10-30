@@ -1,0 +1,72 @@
+[
+  {
+    "id": "c-101",
+    "latitude": -6.175392,
+    "longitude": 106.827153,
+    "rt": "001",
+    "rw": "002",
+    "kelurahan": "Gambir",
+    "kecamatan": "Gambir",
+    "kota": "Jakarta Pusat",
+    "catatan": "Kawasan Monas & sekitarnya, plang di gerbang barat",
+    "upvotes": 12,
+    "downvotes": 0,
+    "createdAt": 1729000000000
+  },
+  {
+    "id": "c-102",
+    "latitude": -6.8924,
+    "longitude": 107.6167,
+    "rt": "004",
+    "rw": "008",
+    "kelurahan": "Lebak Siliwangi",
+    "kecamatan": "Coblong",
+    "kota": "Kota Bandung",
+    "catatan": "Area kosan mahasiswa Tubagus Ismail gang 4",
+    "upvotes": 18,
+    "downvotes": 1,
+    "createdAt": 1729100000000
+  },
+  {
+    "id": "c-103",
+    "latitude": -7.7654,
+    "longitude": 110.3789,
+    "rt": "007",
+    "rw": "049",
+    "kelurahan": "Caturtunggal",
+    "kecamatan": "Depok",
+    "kota": "Kabupaten Sleman",
+    "catatan": "Pogung Dalangan, dekat Masjid Pogung Raya",
+    "upvotes": 25,
+    "downvotes": 0,
+    "createdAt": 1729200000000
+  },
+  {
+    "id": "c-104",
+    "latitude": -6.3688,
+    "longitude": 106.8329,
+    "rt": "002",
+    "rw": "003",
+    "kelurahan": "Kukusan",
+    "kecamatan": "Beji",
+    "kota": "Kota Depok",
+    "catatan": "Kukusan Kelurahan (Kukel) UI, plang di gapura gang",
+    "upvotes": 14,
+    "downvotes": 0,
+    "createdAt": 1729250000000
+  },
+  {
+    "id": "rtrw-1793384680048-hc39",
+    "latitude": -6.1754,
+    "longitude": 106.8272,
+    "rt": "003",
+    "rw": "002",
+    "kelurahan": "Gambir",
+    "kecamatan": "",
+    "kota": "",
+    "catatan": "Plang depan pos satpam",
+    "upvotes": 1,
+    "downvotes": 0,
+    "createdAt": 1793384680048
+  }
+]
