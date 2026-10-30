@@ -92,7 +92,7 @@ export default function HomePage() {
     }
   }, []);
 
-  // Fetch Nearby Places & Facilities (Schools, Mosques, Offices)
+  // Fetch Nearby Places & Facilities (Schools, Mosques, Offices, RT/RW Anchors)
   const fetchNearbyPlaces = useCallback(async (lat: number, lon: number) => {
     try {
       const res = await fetch(`/api/nearby-places?lat=${lat}&lon=${lon}`);
@@ -100,6 +100,23 @@ export default function HomePage() {
         const data = await res.json();
         setNearbyPlaces(data.places || []);
         setNearbySuggestedRTRW(data.suggestedRTRW || null);
+
+        // Auto-fill RT/RW if empty and high-confidence anchor nearby (<= 300m)
+        if (data.suggestedRTRW && (data.suggestedRTRW.distanceMeters ?? 999) <= 300) {
+          setAddress((prev) => {
+            if (!prev) return prev;
+            if (!prev.rt && !prev.rw) {
+              const updated: AddressData = {
+                ...prev,
+                rt: data.suggestedRTRW.rt || prev.rt,
+                rw: data.suggestedRTRW.rw || prev.rw,
+              };
+              updated.formattedAddress = formatSingleLineAddress(updated);
+              return updated;
+            }
+            return prev;
+          });
+        }
       }
     } catch (err) {
       console.error('Error fetching nearby places:', err);
@@ -187,6 +204,19 @@ export default function HomePage() {
       const updated: AddressData = {
         ...prev,
         kelurahan: villageName,
+      };
+      updated.formattedAddress = formatSingleLineAddress(updated);
+      return updated;
+    });
+  }, []);
+
+  const handleApplySuggestedRTRW = useCallback((rt: string, rw: string) => {
+    setAddress((prev) => {
+      if (!prev) return prev;
+      const updated: AddressData = {
+        ...prev,
+        rt,
+        rw,
       };
       updated.formattedAddress = formatSingleLineAddress(updated);
       return updated;
@@ -493,6 +523,8 @@ export default function HomePage() {
               onOpenSmartParser={() => setIsSmartParserOpen(true)}
               onOpenAIModal={() => setIsAIModalOpen(true)}
               onSelectVillage={handleSelectOfficialVillage}
+              suggestedRTRW={nearbySuggestedRTRW}
+              onApplySuggestedRTRW={handleApplySuggestedRTRW}
             />
           </div>
         </div>

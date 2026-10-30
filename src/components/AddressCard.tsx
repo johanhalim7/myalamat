@@ -30,6 +30,8 @@ interface AddressCardProps {
   onOpenSmartParser: () => void;
   onOpenAIModal?: () => void;
   onSelectVillage?: (villageName: string) => void;
+  suggestedRTRW?: { rt: string; rw: string; source: string; distanceMeters?: number } | null;
+  onApplySuggestedRTRW?: (rt: string, rw: string) => void;
 }
 
 export default function AddressCard({
@@ -42,6 +44,8 @@ export default function AddressCard({
   onOpenSmartParser,
   onOpenAIModal,
   onSelectVillage,
+  suggestedRTRW,
+  onApplySuggestedRTRW,
 }: AddressCardProps) {
   const [copiedType, setCopiedType] = useState<string | null>(null);
 
@@ -220,6 +224,25 @@ export default function AddressCard({
               Ubah
             </button>
           </div>
+
+          {/* RT/RW Micro Anchor Suggestion Chip */}
+          {suggestedRTRW && isRtRwEmpty && (
+            <div className="col-span-1 sm:col-span-2 p-2.5 bg-emerald-50/90 dark:bg-emerald-950/40 rounded-xl border border-emerald-200 dark:border-emerald-800/60 flex items-center justify-between text-xs gap-2 animate-in fade-in">
+              <div className="flex items-center gap-1.5 text-emerald-900 dark:text-emerald-200 text-[11px]">
+                <Sparkles className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <span>
+                  Jangkar sekitar (<b>{suggestedRTRW.source}</b> ±{suggestedRTRW.distanceMeters}m): <b>RT {suggestedRTRW.rt || '-'}/RW {suggestedRTRW.rw || '-'}</b>
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => onApplySuggestedRTRW && onApplySuggestedRTRW(suggestedRTRW.rt, suggestedRTRW.rw)}
+                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-bold shrink-0 transition-colors shadow-xs active:scale-95"
+              >
+                Terapkan
+              </button>
+            </div>
+          )}
 
           {/* Kelurahan */}
           <div className="p-2.5 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-100 dark:border-slate-800 flex items-start justify-between">

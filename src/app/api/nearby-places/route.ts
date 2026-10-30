@@ -33,18 +33,28 @@ function getDistanceInMeters(lat1: number, lon1: number, lat2: number, lon2: num
 }
 
 function extractRTRWFromText(text: string): { rt?: string; rw?: string } | null {
+  if (!text) return null;
   let rt: string | undefined;
   let rw: string | undefined;
 
-  const rtMatch = text.match(/\bRT\.?\s*(\d{1,3})\b/i);
-  if (rtMatch) rt = rtMatch[1];
-  const rwMatch = text.match(/\bRW\.?\s*(\d{1,3})\b/i);
-  if (rwMatch) rw = rwMatch[1];
+  // Pattern 1: RT. 07 / RW. 03 or RT 01/RW 05 or RT.01/05
+  const combinedMatch = text.match(/\bRT\.?\s*(\d{1,3})\s*(?:[\/,&\-]|dan)\s*RW\.?\s*(\d{1,3})\b/i);
+  if (combinedMatch) {
+    rt = combinedMatch[1];
+    rw = combinedMatch[2];
+  } else {
+    // Pattern 2: RT 03 and RW 05 separately
+    const rtMatch = text.match(/\bRT\.?\s*(\d{1,3})\b/i);
+    if (rtMatch) rt = rtMatch[1];
+    const rwMatch = text.match(/\bRW\.?\s*(\d{1,3})\b/i);
+    if (rwMatch) rw = rwMatch[1];
 
-  const composite = text.match(/\b(\d{1,3})\s*\/\s*(\d{1,3})\b/);
-  if (composite && (!rt || !rw)) {
-    if (!rt) rt = composite[1];
-    if (!rw) rw = composite[2];
+    // Pattern 3: Composite slash e.g. "07/03"
+    const composite = text.match(/\b(\d{1,3})\s*\/\s*(\d{1,3})\b/);
+    if (composite && (!rt || !rw)) {
+      if (!rt) rt = composite[1];
+      if (!rw) rw = composite[2];
+    }
   }
 
   if (rt || rw) {
@@ -71,15 +81,26 @@ export async function GET(request: NextRequest) {
   const places: NearbyPlace[] = [];
 
   try {
-    // Search for schools, mosques, puskesmas, offices within bounding box of ~700 meters
-    const delta = 0.007; // ~770m
+    // Search within bounding box of ~800 meters
+    const delta = 0.0075; // ~800m
     const minLon = (lon - delta).toFixed(5);
     const maxLon = (lon + delta).toFixed(5);
     const minLat = (lat - delta).toFixed(5);
     const maxLat = (lat + delta).toFixed(5);
 
-    const queryCategories = ['sekolah', 'masjid', 'puskesmas', 'kelurahan', 'kantor'];
-    
+    // Prioritize neighborhood anchor POIs (Pos Kamling, Pos Ronda, Balai RW, Posyandu)
+    const queryCategories = [
+      'pos kamling',
+      'balai rw',
+      'posyandu',
+      'pos ronda',
+      'pos satpam',
+      'kantor kelurahan',
+      'sekolah',
+      'masjid',
+      'puskesmas',
+    ];
+
     // Run searches in parallel
     const searchPromises = queryCategories.map(async (query) => {
       const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(
@@ -173,8 +194,9 @@ export async function GET(request: NextRequest) {
     // Sort by proximity
     places.sort((a, b) => a.distanceMeters - b.distanceMeters);
 
-    // Find first place that contains RT/RW info
-    const placeWithRTRW = places.find((p) => p.detectedRTRW && (p.detectedRTRW.rt || p.detectedRTRW.rw));
+    // Find all places that contain RT/RW info
+    const rtrwPlaces = places.filter((p) => p.detectedRTRW && (p.detectedRTRW.rt || p.detectedRTRW.rw));
+    const placeWithRTRW = rtrwPlaces[0];
 
     return NextResponse.json({
       places,
@@ -186,6 +208,12 @@ export async function GET(request: NextRequest) {
             distanceMeters: placeWithRTRW.distanceMeters,
           }
         : null,
+      rtrwCandidates: rtrwPlaces.map((p) => ({
+        rt: p.detectedRTRW!.rt || '',
+        rw: p.detectedRTRW!.rw || '',
+        source: p.name,
+        distanceMeters: p.distanceMeters,
+      })),
     });
   } catch (err: unknown) {
     console.error('Nearby places error:', err);
