@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { AddressData, AIAddressAnalysis, NearbyPlace, CommunityRTRWContribution } from '@/types/address';
-import { X, Sparkles, Brain, Check, Key, Loader2, Info, AlertTriangle } from 'lucide-react';
+import { X, Sparkles, Brain, Check, Loader2, Info, CheckCircle2 } from 'lucide-react';
 
 interface AIAddressModalProps {
   isOpen: boolean;
@@ -22,37 +22,15 @@ export default function AIAddressModal({
   onApplyAI,
 }: AIAddressModalProps) {
   const [userNotes, setUserNotes] = useState('');
-  const [apiKey, setApiKey] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('alamatku_gemini_key') || '';
-    }
-    return '';
-  });
-  const [showKeyInput, setShowKeyInput] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<AIAddressAnalysis | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [hasServerKey, setHasServerKey] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    if (isOpen) {
-      fetch('/api/ai-analyze')
-        .then((res) => res.json())
-        .then((data) => setHasServerKey(!!data.hasServerKey))
-        .catch(() => setHasServerKey(false));
-    }
-  }, [isOpen]);
 
   if (!isOpen || !address) return null;
 
   const handleRunAI = async () => {
     setIsAnalyzing(true);
     setErrorMessage(null);
-
-    // Save apiKey to localStorage if entered
-    if (apiKey) {
-      localStorage.setItem('alamatku_gemini_key', apiKey.trim());
-    }
 
     try {
       const res = await fetch('/api/ai-analyze', {
@@ -63,13 +41,12 @@ export default function AIAddressModal({
           nearbyPlaces,
           communityRTRW,
           userNotes: userNotes.trim(),
-          apiKey: apiKey.trim(),
         }),
       });
 
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || 'Gagal menjalankan analisis AI.');
+        throw new Error(data.error || 'Gagal menjalankan analisis.');
       }
 
       setAnalysisResult(data);
@@ -111,11 +88,11 @@ export default function AIAddressModal({
             </div>
             <div>
               <h3 className="text-sm font-bold flex items-center gap-1.5">
-                AI Address Specialist
+                Smart Address Specialist
                 <Sparkles className="w-3.5 h-3.5 text-amber-300" />
               </h3>
               <p className="text-[11px] text-violet-100">
-                Koreksi hierarki wilayah & perjelas patokan kurir dengan AI
+                Koreksi hierarki wilayah, bersihkan jalan vs kelurahan, & buat patokan kurir
               </p>
             </div>
           </div>
@@ -134,6 +111,14 @@ export default function AIAddressModal({
               {errorMessage}
             </div>
           )}
+
+          {/* Engine Status Badge */}
+          <div className="p-3 bg-indigo-50/60 dark:bg-indigo-950/30 rounded-2xl border border-indigo-100 dark:border-indigo-900/50 flex items-center gap-2.5">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            <div className="text-[11px] text-slate-700 dark:text-slate-300">
+              <b className="text-indigo-600 dark:text-indigo-400">Smart Postal Engine Bawaan:</b> Siap pakai otomatis, instan, bebas kuota, dan tanpa perlu setup API key.
+            </div>
+          </div>
 
           {/* Current Address Preview */}
           <div className="p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-100 dark:border-slate-800">
@@ -159,54 +144,6 @@ export default function AIAddressModal({
             />
           </div>
 
-          {/* Optional Gemini API Key Section */}
-          <div className="p-3.5 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                <Key className="w-3.5 h-3.5 text-slate-400" />
-                Gemini API Key
-              </span>
-              <button
-                type="button"
-                onClick={() => setShowKeyInput(!showKeyInput)}
-                className="text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline font-semibold"
-              >
-                {showKeyInput ? 'Sembunyikan' : apiKey ? 'Ubah Key Pribadi' : 'Input Key Manual'}
-              </button>
-            </div>
-
-            {/* Server key status info */}
-            <div className="flex items-center justify-between text-[11px] pt-1">
-              <span className="text-slate-500">Status Key di Vercel:</span>
-              {hasServerKey === null ? (
-                <span className="text-slate-400">Memeriksa...</span>
-              ) : hasServerKey ? (
-                <span className="text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
-                  ✓ Terdeteksi di Vercel
-                </span>
-              ) : (
-                <span className="text-amber-600 dark:text-amber-400 font-semibold bg-amber-50 dark:bg-amber-950/40 px-2 py-0.5 rounded-full border border-amber-200 dark:border-amber-800">
-                  Belum aktif (Perlu Redeploy Vercel)
-                </span>
-              )}
-            </div>
-
-            {showKeyInput && (
-              <div className="mt-2.5 pt-2.5 border-t border-slate-200 dark:border-slate-700 space-y-1.5">
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="Masukkan Gemini API Key Anda (AIzaSy...)"
-                  className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-100 text-xs font-mono"
-                />
-                <p className="text-[10px] text-slate-400">
-                  Anda bisa langsung paste Gemini API Key di sini untuk langsung menggunakan Gemini AI tanpa harus menunggu redeploy di Vercel.
-                </p>
-              </div>
-            )}
-          </div>
-
           {/* Action Button */}
           <button
             type="button"
@@ -217,12 +154,12 @@ export default function AIAddressModal({
             {isAnalyzing ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                <span>AI Sedang Menganalisis & Memverifikasi...</span>
+                <span>Sedang Menganalisis & Menyempurnakan...</span>
               </>
             ) : (
               <>
                 <Sparkles className="w-4 h-4 text-amber-300" />
-                <span>Jalankan Analisis AI Sekarang</span>
+                <span>Jalankan Analisis Sekarang</span>
               </>
             )}
           </button>
@@ -236,30 +173,9 @@ export default function AIAddressModal({
                   Skor Akurasi: {analysisResult.confidenceScore}%
                 </span>
                 <span className="text-[10px] text-slate-600 dark:text-slate-300 font-medium">
-                  Sumber:{' '}
-                  {analysisResult.aiSource === 'gemini' ? (
-                    <b className="text-violet-600 dark:text-violet-400">Gemini Flash ✨</b>
-                  ) : (
-                    <b className="text-blue-600 dark:text-blue-400">Built-in Postal AI 🏛️</b>
-                  )}
+                  Sumber: <b className="text-indigo-600 dark:text-indigo-400">Smart Postal Engine ⚡</b>
                 </span>
               </div>
-
-              {/* Gemini Error Callout if occurred */}
-              {analysisResult.geminiError && (
-                <div className="p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-2xl text-amber-900 dark:text-amber-200 text-xs space-y-1.5">
-                  <div className="flex items-center gap-1.5 font-bold text-amber-800 dark:text-amber-300">
-                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                    <span>Info Panggilan Gemini API:</span>
-                  </div>
-                  <p className="text-[11px] leading-relaxed break-words font-mono bg-white/70 dark:bg-black/30 p-2 rounded-lg border border-amber-200 dark:border-amber-900">
-                    {analysisResult.geminiError}
-                  </p>
-                  <p className="text-[10px] text-amber-700 dark:text-amber-300">
-                    Sistem otomatis mengalihkan analisis ke <b>Built-in Postal AI</b> agar perapihan alamat Anda tetap berhasil 100%.
-                  </p>
-                </div>
-              )}
 
               {/* Formatted address */}
               <div className="p-3 bg-white dark:bg-slate-900 rounded-2xl border border-indigo-100 dark:border-indigo-900 text-xs text-slate-900 dark:text-slate-100 font-bold leading-relaxed">
@@ -269,8 +185,16 @@ export default function AIAddressModal({
               {/* Breakdown Grid */}
               <div className="grid grid-cols-2 gap-2 text-slate-700 dark:text-slate-300">
                 <div className="p-2 bg-white dark:bg-slate-900 rounded-xl border border-indigo-100 dark:border-indigo-900">
-                  <span className="text-[10px] text-slate-400 block">Kelurahan:</span>
-                  <span className="font-semibold">{analysisResult.kelurahan || '-'}</span>
+                  <span className="text-[10px] text-slate-400 block">Jalan:</span>
+                  <span className="font-semibold text-slate-900 dark:text-slate-100 truncate block">
+                    {analysisResult.jalan || '-'}
+                  </span>
+                </div>
+                <div className="p-2 bg-white dark:bg-slate-900 rounded-xl border border-indigo-100 dark:border-indigo-900">
+                  <span className="text-[10px] text-slate-400 block">Kelurahan / Desa:</span>
+                  <span className="font-semibold text-slate-900 dark:text-slate-100 truncate block">
+                    {analysisResult.kelurahan || '-'}
+                  </span>
                 </div>
                 <div className="p-2 bg-white dark:bg-slate-900 rounded-xl border border-indigo-100 dark:border-indigo-900">
                   <span className="text-[10px] text-slate-400 block">Kecamatan:</span>
@@ -282,21 +206,17 @@ export default function AIAddressModal({
                     {analysisResult.rt || analysisResult.rw ? `RT ${analysisResult.rt || '-'}/RW ${analysisResult.rw || '-'}` : '-'}
                   </span>
                 </div>
-                <div className="p-2 bg-white dark:bg-slate-900 rounded-xl border border-indigo-100 dark:border-indigo-900">
-                  <span className="text-[10px] text-slate-400 block">Kode Pos:</span>
-                  <span className="font-semibold">{analysisResult.kodePos || '-'}</span>
-                </div>
               </div>
 
               {/* Explanation & Advice */}
               <div className="space-y-1.5 text-[11px] text-indigo-950 dark:text-indigo-200">
                 <p className="flex items-start gap-1.5">
                   <Info className="w-3.5 h-3.5 text-indigo-600 shrink-0 mt-0.5" />
-                  <span><b>Penjelasan AI:</b> {analysisResult.explanation}</span>
+                  <span><b>Penjelasan:</b> {analysisResult.explanation}</span>
                 </p>
                 {analysisResult.patokan && (
                   <p className="p-2 bg-white dark:bg-slate-900 rounded-xl border border-indigo-100 dark:border-indigo-900 text-xs">
-                    <b>Patokan Otomatis:</b> {analysisResult.patokan}
+                    <b>Patokan Kurir:</b> {analysisResult.patokan}
                   </p>
                 )}
               </div>
@@ -321,7 +241,7 @@ export default function AIAddressModal({
               className="px-5 py-2.5 bg-violet-600 hover:bg-violet-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm active:scale-95 transition-all"
             >
               <Check className="w-4 h-4" />
-              <span>Terapkan Hasil AI</span>
+              <span>Terapkan Hasil</span>
             </button>
           )}
         </div>

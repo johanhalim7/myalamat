@@ -46,6 +46,14 @@ export function parseNominatimToAddress(
     }
   }
 
+  // Road & House Number (extract first so we can differentiate roads from kelurahan)
+  const roadName = addr.road || addr.street || addr.pedestrian || addr.residential || '';
+  const houseNumber = addr.house_number || addr.building || '';
+  let jalan = roadName;
+  if (jalan && houseNumber && !jalan.includes(houseNumber)) {
+    jalan = `${jalan} No. ${houseNumber}`;
+  }
+
   // Work backwards from end of display_name
   const hierarchyParts = [...rawParts];
   if (hierarchyParts.length > 0 && hierarchyParts[hierarchyParts.length - 1].toLowerCase() === 'indonesia') {
@@ -72,9 +80,13 @@ export function parseNominatimToAddress(
     parsedKecamatan = hierarchyParts.pop() || '';
   }
 
-  // Next is Kelurahan / Desa
+  // Next candidate for Kelurahan / Desa
   if (hierarchyParts.length > 0) {
-    parsedKelurahan = hierarchyParts.pop() || '';
+    const candidate = hierarchyParts.pop() || '';
+    // Prevent taking road name, building, or street prefixes as Kelurahan!
+    if (!isRoadOrBuilding(candidate, roadName)) {
+      parsedKelurahan = candidate;
+    }
   }
 
   // Cross-reference with Nominatim address object tags if present
@@ -93,40 +105,62 @@ export function parseNominatimToAddress(
   }
 
   // Check if kecamatan and kelurahan were swapped or misclassified by OSM
-  // For instance, if kelurahan has "Utara", "Selatan", "Barat", "Timur", "Tengah", "Wetan", "Kidul", "Kulon"
-  // and kecamatan is missing or identical to kota, shift it to kecamatan!
+  // For instance, if kelurahan has directional keywords (Utara/Selatan/dll) and kecamatan is empty
   const directionalRegex = /\b(utara|selatan|barat|timur|tengah|wetan|kidul|kulon)\b/i;
   if (directionalRegex.test(parsedKelurahan) && (!parsedKecamatan || parsedKecamatan === parsedKota)) {
     parsedKecamatan = parsedKelurahan;
     parsedKelurahan = '';
   }
 
-  // Fallbacks if still empty
+  // Fallbacks for Kecamatan if still empty
   if (!parsedKecamatan && (addr.district || addr.subdistrict || addr.city_district)) {
     parsedKecamatan = addr.district || addr.subdistrict || addr.city_district || '';
   }
-  if (!parsedKelurahan && (addr.village || addr.suburb || addr.hamlet || addr.neighbourhood)) {
-    parsedKelurahan = addr.village || addr.suburb || addr.hamlet || addr.neighbourhood || '';
+
+  // Fallbacks for Kelurahan: check specific OSM address tags
+  if (!parsedKelurahan) {
+    if (addr.village && !isRoadOrBuilding(addr.village, roadName)) {
+      parsedKelurahan = addr.village;
+    } else if (addr.hamlet && !isRoadOrBuilding(addr.hamlet, roadName)) {
+      parsedKelurahan = addr.hamlet;
+    } else if (addr.suburb && addr.suburb !== parsedKecamatan && !isRoadOrBuilding(addr.suburb, roadName)) {
+      parsedKelurahan = addr.suburb;
+    } else if (addr.neighbourhood && addr.neighbourhood !== parsedKecamatan && !isRoadOrBuilding(addr.neighbourhood, roadName)) {
+      parsedKelurahan = addr.neighbourhood;
+    }
   }
 
-  // Road & House Number
-  const roadName = addr.road || addr.street || addr.pedestrian || addr.residential || '';
-  const houseNumber = addr.house_number || addr.building || '';
-  let jalan = roadName;
-  if (jalan && houseNumber && !jalan.includes(houseNumber)) {
-    jalan = `${jalan} No. ${houseNumber}`;
+  // Safety check: Never allow kelurahan to equal road, kecamatan, or kota
+  if (parsedKelurahan) {
+    if (
+      isRoadOrBuilding(parsedKelurahan, roadName) ||
+      (jalan && parsedKelurahan.toLowerCase() === jalan.toLowerCase()) ||
+      (parsedKecamatan && parsedKelurahan.toLowerCase() === parsedKecamatan.toLowerCase()) ||
+      (parsedKota && parsedKelurahan.toLowerCase() === parsedKota.toLowerCase())
+    ) {
+      parsedKelurahan = '';
+    }
   }
+
+  // If road is still empty, look at first part of display_name that is not an admin unit
   if (!jalan && rawParts.length > 0) {
-    // If no road tag found, take first part
-    jalan = rawParts[0];
+    const firstPart = rawParts[0];
+    if (
+      firstPart !== parsedKelurahan &&
+      firstPart !== parsedKecamatan &&
+      firstPart !== parsedKota &&
+      firstPart !== parsedProvinsi
+    ) {
+      jalan = firstPart;
+    }
   }
 
   const addressObj: AddressData = {
     jalan: cleanString(jalan),
     rt: cleanString(parsedRT),
     rw: cleanString(parsedRW),
-    kelurahan: cleanString(parsedKelurahan),
-    kecamatan: cleanString(parsedKecamatan),
+    kelurahan: cleanString(stripAdminPrefix(parsedKelurahan)),
+    kecamatan: cleanString(stripAdminPrefix(parsedKecamatan)),
     kota: cleanString(parsedKota),
     provinsi: cleanString(parsedProvinsi),
     kodePos: cleanString(parsedKodePos),
@@ -140,6 +174,33 @@ export function parseNominatimToAddress(
 
   addressObj.formattedAddress = formatSingleLineAddress(addressObj);
   return addressObj;
+}
+
+function isRoadOrBuilding(str: string, knownRoad: string = ''): boolean {
+  if (!str) return false;
+  const s = str.trim().toLowerCase();
+  if (knownRoad) {
+    const r = knownRoad.trim().toLowerCase();
+    if (s === r || s.startsWith(r) || r.startsWith(s)) return true;
+  }
+  if (
+    /^(jl\.?|jalan|gang|gg\.?|lorong|lrg\.?|boulevard|bulevar|avenue|ave|ruas|tol|arteri|perum|perumahan|komplek|komp\.?|blok|kav|kavling|gedung|tower|mall|plaza|apartemen|hotel|wisma|graha|kantor|rs|rsud|puskesmas|sekolah|masjid|gereja)\b/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (/\b(no\.?|nomor|km\.?|kilometer)\s*\d+/i.test(s)) return true;
+  if (/^(rt|rw)\s*\d+/i.test(s) || /^\d+\/\d+$/.test(s)) return true;
+  return false;
+}
+
+function stripAdminPrefix(str: string): string {
+  if (!str) return '';
+  return str
+    .replace(/^(kelurahan|desa|kel\.?|ds\.?)\s+/i, '')
+    .replace(/^(kecamatan|kec\.?|distrik)\s+/i, '')
+    .trim();
 }
 
 function cleanString(str: string): string {

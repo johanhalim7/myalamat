@@ -4,7 +4,8 @@ import { formatSingleLineAddress } from '@/utils/addressParser';
 
 export async function GET() {
   return NextResponse.json({
-    hasServerKey: !!process.env.GEMINI_API_KEY,
+    status: 'ok',
+    engine: 'built-in',
   });
 }
 
@@ -16,49 +17,29 @@ export async function POST(request: NextRequest) {
       nearbyPlaces = [],
       communityRTRW = [],
       userNotes = '',
-      apiKey = '',
     } = body as {
       address: AddressData;
       nearbyPlaces?: NearbyPlace[];
       communityRTRW?: CommunityRTRWContribution[];
       userNotes?: string;
-      apiKey?: string;
     };
 
     if (!address) {
       return NextResponse.json({ error: 'Data alamat diperlukan.' }, { status: 400 });
     }
 
-    const effectiveKey = apiKey || process.env.GEMINI_API_KEY || '';
-    let geminiFailureReason: string | undefined;
-
-    // If Gemini key is available, call Gemini API
-    if (effectiveKey) {
-      try {
-        const geminiResult = await callGeminiAPI(effectiveKey, address, nearbyPlaces, communityRTRW, userNotes);
-        if (geminiResult) {
-          return NextResponse.json(geminiResult);
-        }
-      } catch (geminiError: unknown) {
-        const errMsg = geminiError instanceof Error ? geminiError.message : String(geminiError);
-        console.warn('Gemini API call failed, falling back to heuristic engine:', errMsg);
-        geminiFailureReason = errMsg;
-      }
-    }
-
-    // Fallback: Built-in Indonesian Administrative & Postal Intelligence Engine
-    const heuristicResult = runHeuristicEngine(
+    // Run Built-in Indonesian Administrative & Postal Intelligence Engine
+    const result = runHeuristicEngine(
       address,
       nearbyPlaces,
       communityRTRW,
-      userNotes,
-      geminiFailureReason
+      userNotes
     );
-    return NextResponse.json(heuristicResult);
+    return NextResponse.json(result);
   } catch (err: unknown) {
     console.error('AI analyze error:', err);
     return NextResponse.json(
-      { error: 'Gagal menganalisis alamat dengan AI.' },
+      { error: 'Gagal menganalisis alamat dengan Smart Engine.' },
       { status: 500 }
     );
   }
@@ -69,8 +50,7 @@ function runHeuristicEngine(
   address: AddressData,
   nearbyPlaces: NearbyPlace[],
   communityRTRW: CommunityRTRWContribution[],
-  userNotes: string,
-  geminiError?: string
+  userNotes: string
 ): AIAddressAnalysis {
   const jalan = address.jalan;
   let rt = address.rt;
@@ -82,11 +62,23 @@ function runHeuristicEngine(
   const kodePos = address.kodePos;
   let patokan = address.patokan;
 
-  let confidenceScore = 85;
+  let confidenceScore = 90;
   const explanationParts: string[] = [];
   let detectedFromPOIs: AIAddressAnalysis['detectedFromPOIs'] | undefined;
 
-  // 1. Check and correct Kelurahan vs Kecamatan
+  // 1. Detect if kelurahan is actually a road or building, and clean it!
+  const isRoadPattern = /^(jl\.?|jalan|gang|gg\.?|lorong|lrg\.?|boulevard|bulevar|avenue|ave|ruas|tol|perum|perumahan|komplek|komp\.?|blok)\b/i;
+  if (
+    kelurahan &&
+    (isRoadPattern.test(kelurahan) ||
+      (jalan && kelurahan.toLowerCase() === jalan.toLowerCase()) ||
+      (jalan && jalan.toLowerCase().includes(kelurahan.toLowerCase())))
+  ) {
+    explanationParts.push(`Membersihkan '${kelurahan}' dari kolom kelurahan/desa karena terdeteksi sebagai nama jalan.`);
+    kelurahan = '';
+  }
+
+  // 2. Check and correct Kelurahan vs Kecamatan
   const directional = /\b(utara|selatan|barat|timur|tengah|wetan|kidul|kulon)\b/i;
   if (directional.test(kelurahan) && (!kecamatan || kecamatan === kota)) {
     explanationParts.push(`Memperbaiki '${kelurahan}' yang sebelumnya terdeteksi sebagai kelurahan menjadi kecamatan.`);
@@ -95,7 +87,22 @@ function runHeuristicEngine(
     confidenceScore += 5;
   }
 
-  // 2. If RT/RW is empty, check nearby places or community
+  // 3. If kelurahan is empty, search nearbyPlaces for a Kelurahan / Desa office or public facility
+  if (!kelurahan && nearbyPlaces.length > 0) {
+    const kelurahanPOI = nearbyPlaces.find((p) =>
+      /\b(kelurahan|desa|balai\s+desa)\b/i.test(p.name)
+    );
+    if (kelurahanPOI) {
+      const match = kelurahanPOI.name.match(/\b(?:kelurahan|desa|balai\s+desa)\s+([a-zA-Z\s]+)/i);
+      if (match && match[1]) {
+        kelurahan = match[1].trim();
+        explanationParts.push(`Mendeteksi Kelurahan '${kelurahan}' dari fasilitas sekitar (${kelurahanPOI.name}).`);
+        confidenceScore += 5;
+      }
+    }
+  }
+
+  // 4. If RT/RW is empty, check nearby places or community
   if (!rt && !rw) {
     // Check nearby community data first
     if (communityRTRW.length > 0 && communityRTRW[0].rt && communityRTRW[0].rw) {
@@ -104,7 +111,7 @@ function runHeuristicEngine(
       explanationParts.push(
         `Mengisi RT ${rt} / RW ${rw} dari kontribusi warga sekitar (±${communityRTRW[0].distanceMeters}m).`
       );
-      confidenceScore += 10;
+      confidenceScore += 5;
     } else {
       // Check nearby public facilities (schools, mosques, offices)
       const placeWithRTRW = nearbyPlaces.find((p) => p.detectedRTRW?.rt || p.detectedRTRW?.rw);
@@ -120,12 +127,12 @@ function runHeuristicEngine(
         explanationParts.push(
           `Mendeteksi RT ${rt} / RW ${rw} dari fasilitas publik terdekat: ${placeWithRTRW.name} (±${placeWithRTRW.distanceMeters}m).`
         );
-        confidenceScore += 10;
+        confidenceScore += 5;
       }
     }
   }
 
-  // 3. Build optimized courier patokan from nearest landmark
+  // 5. Build optimized courier patokan from nearest landmark
   if (!patokan && nearbyPlaces.length > 0) {
     const topPOIs = nearbyPlaces.slice(0, 2);
     const landmarkNotes = topPOIs
@@ -171,157 +178,10 @@ function runHeuristicEngine(
     explanation:
       explanationParts.length > 0
         ? explanationParts.join(' ')
-        : 'Hierarki administrasi (Kelurahan, Kecamatan, Kota) telah divalidasi sesuai standar wilayah Indonesia.',
+        : 'Hierarki administrasi (Jalan, Kelurahan, Kecamatan, Kota) telah divalidasi dan disesuaikan standar pos logistik Indonesia.',
     deliveryAdvice:
       'Gunakan format ini untuk memesan paket di Shopee atau Tokopedia. Pastikan memilih Kecamatan terlebih dahulu saat memasukkan alamat baru.',
     hierarchyVerified: true,
     detectedFromPOIs,
-    geminiError,
-    hasServerKey: !!process.env.GEMINI_API_KEY,
-  };
-}
-
-// Call Gemini Live API
-async function callGeminiAPI(
-  key: string,
-  address: AddressData,
-  nearbyPlaces: NearbyPlace[],
-  communityRTRW: CommunityRTRWContribution[],
-  userNotes: string
-): Promise<AIAddressAnalysis | null> {
-  const prompt = `Anda adalah Spesialis Alamat & Logistik Pos Indonesia. Tugas Anda adalah memvalidasi, merapikan, dan menyempurnakan struktur alamat Indonesia berikut agar 100% akurat untuk kurir e-commerce (Shopee, Tokopedia, J&T, SiCepat).
-
-Data Alamat Mentah:
-- Display Name: ${address.displayName}
-- Jalan Terdeteksi: ${address.jalan}
-- RT: ${address.rt || 'KOSONG'}
-- RW: ${address.rw || 'KOSONG'}
-- Kelurahan/Desa: ${address.kelurahan}
-- Kecamatan: ${address.kecamatan}
-- Kota/Kabupaten: ${address.kota}
-- Provinsi: ${address.provinsi}
-- Kode Pos: ${address.kodePos}
-- Koordinat: ${address.latitude}, ${address.longitude}
-
-Fasilitas / Sekolah / Tempat Sekitar:
-${nearbyPlaces.slice(0, 5).map((p) => `- ${p.name} (${p.categoryLabel}, ±${p.distanceMeters}m)`).join('\n') || 'Tidak ada'}
-
-Data RT/RW Komunitas Terdekat:
-${communityRTRW.slice(0, 3).map((c) => `- RT ${c.rt}/RW ${c.rw} (±${c.distanceMeters}m)`).join('\n') || 'Tidak ada'}
-
-Catatan Pengguna: ${userNotes || 'Tidak ada'}
-
-Instruksi Khusus:
-1. Pastikan Kecamatan dan Kelurahan tidak tertukar (misal: "Coblong", "Setiabudi", "Bogor Utara" adalah KECAMATAN, sedangkan "Lebak Gede", "Pasar Manggis", "Tanah Baru" adalah KELURAHAN).
-2. Jika RT/RW kosong, simpulkan atau ambil dari sekolah/masjid/komunitas sekitar yang paling masuk akal.
-3. Rangkai patokan kurir yang sangat jelas memanfaatkan sekolah atau tempat ibadah terdekat.
-4. Kembalikan HANYA JSON valid tanpa markdown formatting dengan struktur:
-{
-  "jalan": string,
-  "rt": string,
-  "rw": string,
-  "kelurahan": string,
-  "kecamatan": string,
-  "kota": string,
-  "provinsi": string,
-  "kodePos": string,
-  "patokan": string,
-  "confidenceScore": number (70-100),
-  "explanation": string,
-  "deliveryAdvice": string
-}`;
-
-  const candidateModels = ['gemini-flash-latest', 'gemini-1.5-flash', 'gemini-2.0-flash'];
-  let lastError: Error | null = null;
-  let json: { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> } | null = null;
-
-  for (const model of candidateModels) {
-    try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-goog-api-key': key.trim(),
-          },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { responseMimeType: 'application/json' },
-          }),
-        }
-      );
-
-      if (!response.ok) {
-        const errorJson = (await response.json().catch(() => null)) as {
-          error?: { message?: string; status?: string };
-        } | null;
-        const detail = errorJson?.error?.message || response.statusText || `HTTP ${response.status}`;
-
-        if (response.status === 404) {
-          lastError = new Error(`Google Gemini Error (404): ${detail}`);
-          continue;
-        }
-
-        throw new Error(`Google Gemini Error (${response.status}): ${detail}`);
-      }
-
-      json = (await response.json()) as {
-        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-      };
-      break;
-    } catch (err: unknown) {
-      if (err instanceof Error && err.message.includes('404')) {
-        continue;
-      }
-      throw err;
-    }
-  }
-
-  if (!json) {
-    if (lastError) throw lastError;
-    return null;
-  }
-  const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!rawText) return null;
-
-  // Clean possible markdown code fence (```json ... ```)
-  const cleanedText = rawText
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/i, '')
-    .trim();
-
-  const parsed = JSON.parse(cleanedText);
-
-  const updatedObj: AddressData = {
-    ...address,
-    jalan: parsed.jalan || address.jalan,
-    rt: parsed.rt || address.rt,
-    rw: parsed.rw || address.rw,
-    kelurahan: parsed.kelurahan || address.kelurahan,
-    kecamatan: parsed.kecamatan || address.kecamatan,
-    kota: parsed.kota || address.kota,
-    provinsi: parsed.provinsi || address.provinsi,
-    kodePos: parsed.kodePos || address.kodePos,
-    patokan: parsed.patokan || address.patokan,
-  };
-
-  return {
-    jalan: updatedObj.jalan,
-    rt: updatedObj.rt,
-    rw: updatedObj.rw,
-    kelurahan: updatedObj.kelurahan,
-    kecamatan: updatedObj.kecamatan,
-    kota: updatedObj.kota,
-    provinsi: updatedObj.provinsi,
-    kodePos: updatedObj.kodePos,
-    patokan: updatedObj.patokan,
-    formattedAddress: formatSingleLineAddress(updatedObj),
-    confidenceScore: parsed.confidenceScore || 95,
-    aiSource: 'gemini',
-    explanation: parsed.explanation || 'Diverifikasi langsung menggunakan model Gemini AI.',
-    deliveryAdvice: parsed.deliveryAdvice || 'Format telah disesuaikan untuk pengiriman ekspedisi.',
-    hierarchyVerified: true,
-    hasServerKey: !!process.env.GEMINI_API_KEY,
   };
 }
