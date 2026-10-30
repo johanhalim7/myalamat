@@ -191,8 +191,8 @@ export default function AIAddressModal({
                   </span>
                 </div>
                 <div className="p-2 bg-white dark:bg-slate-900 rounded-xl border border-indigo-100 dark:border-indigo-900">
-                  <span className="text-[10px] text-slate-400 block">Kelurahan / Desa:</span>
-                  <span className="font-semibold text-slate-900 dark:text-slate-100 truncate block">
+                  <span className="text-[10px] text-slate-400 block">Kelurahan / Desa (Resmi):</span>
+                  <span className="font-bold text-indigo-600 dark:text-indigo-400 truncate block">
                     {analysisResult.kelurahan || '-'}
                   </span>
                 </div>
@@ -207,6 +207,49 @@ export default function AIAddressModal({
                   </span>
                 </div>
               </div>
+
+              {/* Kemendagri Official Candidates & Quick Selector */}
+              {analysisResult.officialCandidates && analysisResult.officialCandidates.length > 0 && (
+                <div className="p-2.5 bg-white dark:bg-slate-900 rounded-2xl border border-indigo-100 dark:border-indigo-900/60 space-y-1.5">
+                  <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 block">
+                    Daftar Resmi Kemendagri di Kec. {analysisResult.kecamatan}:
+                  </span>
+                  <div className="flex flex-wrap gap-1">
+                    {analysisResult.officialCandidates.map((c) => {
+                      const isSelected =
+                        (analysisResult.kelurahan || '').toLowerCase().trim() ===
+                        c.name.toLowerCase().trim();
+                      return (
+                        <button
+                          key={c.name}
+                          type="button"
+                          onClick={() => {
+                            setAnalysisResult({
+                              ...analysisResult,
+                              kelurahan: c.name,
+                            });
+                          }}
+                          className={`px-2 py-0.5 rounded-lg text-[10px] font-semibold transition-all flex items-center gap-1 ${
+                            isSelected
+                              ? 'bg-indigo-600 text-white shadow-xs'
+                              : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
+                          }`}
+                        >
+                          {isSelected && <Check className="w-2.5 h-2.5" />}
+                          <span>{c.name}</span>
+                          {c.distanceMeters != null && (
+                            <span className="opacity-70 text-[9px]">
+                              {c.distanceMeters < 100
+                                ? '0km'
+                                : `${(c.distanceMeters / 1000).toFixed(1)}km`}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {/* Explanation & Advice */}
               <div className="space-y-1.5 text-[11px] text-indigo-950 dark:text-indigo-200">

@@ -1,3 +1,9 @@
+export interface OfficialVillageCandidate {
+  name: string;
+  distanceMeters?: number | null;
+  isNearest?: boolean;
+}
+
 export interface AddressData {
   jalan: string;
   rt: string;
@@ -13,6 +19,7 @@ export interface AddressData {
   latitude: number;
   longitude: number;
   accuracy: number | null; // in meters
+  officialVillages?: OfficialVillageCandidate[];
 }
 
 export type AddressLabel = 'Rumah' | 'Kantor' | 'Kos' | 'Kontrakan' | 'Lainnya';
@@ -82,6 +89,12 @@ export interface AIAddressAnalysis {
   };
   geminiError?: string;
   hasServerKey?: boolean;
+  officialCandidates?: OfficialVillageCandidate[];
+  refereeDecision?: {
+    selectedVillage: string;
+    reason: string;
+    wasitSource: 'gemini' | 'smart_referee';
+  };
 }
 
 export interface NominatimAddress {

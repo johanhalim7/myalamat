@@ -1,0 +1,61 @@
+{
+  "jawabarat_cirebon_beber": {
+    "district": "Beber",
+    "regency": "Kabupaten Cirebon",
+    "province": "Jawa Barat",
+    "nearestVillage": {
+      "name": "Kondangsari",
+      "distanceMeters": 7,
+      "lat": -6.8024138,
+      "lon": 108.5252598,
+      "isNearest": true
+    },
+    "villages": [
+      {
+        "name": "Kondangsari",
+        "distanceMeters": 7,
+        "isNearest": true
+      },
+      {
+        "name": "Patapan",
+        "distanceMeters": 462,
+        "isNearest": false
+      },
+      {
+        "name": "Cipinang",
+        "distanceMeters": 2430,
+        "isNearest": false
+      },
+      {
+        "name": "Halimpu",
+        "distanceMeters": 3373,
+        "isNearest": false
+      },
+      {
+        "name": "Cikancas",
+        "distanceMeters": 3775,
+        "isNearest": false
+      },
+      {
+        "name": "Sindangkasih",
+        "distanceMeters": 5096,
+        "isNearest": false
+      },
+      {
+        "name": "Wanayasa",
+        "distanceMeters": 5163,
+        "isNearest": false
+      },
+      {
+        "name": "Sindanghayu",
+        "distanceMeters": 5605,
+        "isNearest": false
+      },
+      {
+        "name": "Ciawigajah",
+        "distanceMeters": 6699,
+        "isNearest": false
+      }
+    ]
+  }
+}

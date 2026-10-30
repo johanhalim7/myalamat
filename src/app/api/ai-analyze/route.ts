@@ -1,11 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { AddressData, AIAddressAnalysis, NearbyPlace, CommunityRTRWContribution } from '@/types/address';
+import {
+  AddressData,
+  AIAddressAnalysis,
+  NearbyPlace,
+  CommunityRTRWContribution,
+  OfficialVillageCandidate,
+} from '@/types/address';
 import { formatSingleLineAddress } from '@/utils/addressParser';
+import { getOfficialVillagesForDistrict } from '@/utils/kemendagri';
 
 export async function GET() {
   return NextResponse.json({
     status: 'ok',
-    engine: 'built-in',
+    engine: 'kemendagri-referee',
+    hasServerKey: !!process.env.GEMINI_API_KEY,
   });
 }
 
@@ -17,32 +25,216 @@ export async function POST(request: NextRequest) {
       nearbyPlaces = [],
       communityRTRW = [],
       userNotes = '',
+      apiKey = '',
     } = body as {
       address: AddressData;
       nearbyPlaces?: NearbyPlace[];
       communityRTRW?: CommunityRTRWContribution[];
       userNotes?: string;
+      apiKey?: string;
     };
 
     if (!address) {
       return NextResponse.json({ error: 'Data alamat diperlukan.' }, { status: 400 });
     }
 
-    // Run Built-in Indonesian Administrative & Postal Intelligence Engine
-    const result = runHeuristicEngine(
+    // 1. Fetch official Kemendagri village candidates for this district
+    const officialData = await getOfficialVillagesForDistrict(
+      address.kecamatan,
+      address.kota,
+      address.provinsi,
+      address.latitude,
+      address.longitude
+    );
+    const officialCandidates = officialData?.villages || [];
+
+    const effectiveKey = apiKey || process.env.GEMINI_API_KEY || '';
+    let refereeResult: {
+      selectedVillage: string;
+      explanation: string;
+      confidenceScore: number;
+      source: 'gemini' | 'smart_referee';
+    } | null = null;
+
+    // 2. If Gemini Key is present, use Gemini in Referee (Wasit) Mode
+    if (effectiveKey && officialCandidates.length > 0) {
+      try {
+        const geminiDecision = await callGeminiReferee(
+          effectiveKey,
+          address,
+          officialCandidates,
+          nearbyPlaces,
+          userNotes
+        );
+        if (geminiDecision) {
+          refereeResult = {
+            ...geminiDecision,
+            source: 'gemini',
+          };
+        }
+      } catch (geminiErr) {
+        console.warn('Gemini referee error, fallback to smart referee:', geminiErr);
+      }
+    }
+
+    // 3. Fallback to Built-in Smart Kemendagri Referee
+    if (!refereeResult) {
+      const smartDecision = runSmartReferee(
+        officialCandidates,
+        nearbyPlaces,
+        address.kecamatan
+      );
+      refereeResult = {
+        ...smartDecision,
+        source: 'smart_referee',
+      };
+    }
+
+    // 4. Run full analysis with verified official village
+    const analysis = runHeuristicEngine(
       address,
       nearbyPlaces,
       communityRTRW,
-      userNotes
+      userNotes,
+      officialCandidates,
+      refereeResult
     );
-    return NextResponse.json(result);
+
+    return NextResponse.json(analysis);
   } catch (err: unknown) {
     console.error('AI analyze error:', err);
     return NextResponse.json(
-      { error: 'Gagal menganalisis alamat dengan Smart Engine.' },
+      { error: 'Gagal menganalisis alamat dengan Wasit AI.' },
       { status: 500 }
     );
   }
+}
+
+async function callGeminiReferee(
+  key: string,
+  address: AddressData,
+  candidates: OfficialVillageCandidate[],
+  nearbyPlaces: NearbyPlace[],
+  userNotes: string
+): Promise<{ selectedVillage: string; explanation: string; confidenceScore: number } | null> {
+  const prompt = `Anda adalah Wasit Validasi Wilayah Resmi Pos Indonesia.
+Tugas Anda adalah MEMILIH 1 Desa/Kelurahan yang paling tepat dari DAFTAR RESMI KEMENDAGRI berikut.
+DILARANG KERAS MENGARANG ATAU MEMILIH NAMA DI LUAR DAFTAR RESMI INI!
+
+Kecamatan: ${address.kecamatan}
+Kabupaten/Kota: ${address.kota}
+Provinsi: ${address.provinsi}
+Koordinat: ${address.latitude}, ${address.longitude}
+
+Daftar Desa/Kelurahan Resmi Kemendagri di Kecamatan ${address.kecamatan}:
+${candidates
+  .map(
+    (c, i) =>
+      `${i + 1}. ${c.name} (${
+        c.distanceMeters != null
+          ? `±${(c.distanceMeters / 1000).toFixed(1)} km dari titik`
+          : 'Jarak pusat tidak diketahui'
+      }${c.isNearest ? ' - Pusat Desa Terdekat' : ''})`
+  )
+  .join('\n')}
+
+Fasilitas & Tempat Sekitar:
+${nearbyPlaces.slice(0, 5).map((p) => `- ${p.name} (${p.categoryLabel}, ±${p.distanceMeters}m)`).join('\n') || 'Tidak ada data'}
+
+Catatan Pengguna: ${userNotes || 'Tidak ada'}
+
+Instruksi Wasit:
+1. Pilih SATU nama desa yang PERSIS sama dengan salah satu nama di Daftar Resmi Kemendagri di atas.
+2. Utamakan desa dengan jarak terdekat atau yang paling didukung bukti fasilitas/sekolah sekitar.
+3. Kembalikan HANYA format JSON valid tanpa markdown code block:
+{
+  "selectedVillage": "Nama Desa Persis Dari Daftar",
+  "confidenceScore": number (85-99),
+  "explanation": "Alasan singkat pemilihan desa berdasarkan jarak/fasilitas"
+}`;
+
+  const response = await fetch(
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-goog-api-key': key.trim(),
+      },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: 'application/json' },
+      }),
+    }
+  );
+
+  if (!response.ok) return null;
+  const json = await response.json();
+  const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!rawText) return null;
+
+  const cleaned = rawText
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+  const parsed = JSON.parse(cleaned);
+
+  // Hard Whitelist Enforcement: must match one of the official Kemendagri candidates
+  const match = candidates.find(
+    (c) => c.name.toLowerCase() === (parsed.selectedVillage || '').toLowerCase().trim()
+  );
+
+  if (!match) {
+    // Hallucination outside Kemendagri list rejected!
+    return null;
+  }
+
+  return {
+    selectedVillage: match.name,
+    explanation: parsed.explanation || `Divalidasi dari daftar resmi Kemendagri oleh Wasit AI.`,
+    confidenceScore: parsed.confidenceScore || 95,
+  };
+}
+
+function runSmartReferee(
+  candidates: OfficialVillageCandidate[],
+  nearbyPlaces: NearbyPlace[],
+  districtName: string
+): { selectedVillage: string; explanation: string; confidenceScore: number } {
+  if (candidates.length === 0) {
+    return {
+      selectedVillage: '',
+      explanation: 'Tidak ditemukan data desa resmi untuk kecamatan ini.',
+      confidenceScore: 80,
+    };
+  }
+
+  // 1. Check if any candidate's name is mentioned in nearby POIs (e.g. "SDN 1 Kondangsari")
+  for (const c of candidates) {
+    const poiMatch = nearbyPlaces.find((p) =>
+      p.name.toLowerCase().includes(c.name.toLowerCase())
+    );
+    if (poiMatch) {
+      return {
+        selectedVillage: c.name,
+        explanation: `Wasit AI mencocokkan desa resmi '${c.name}' dari fasilitas sekitar (${poiMatch.name}).`,
+        confidenceScore: 98,
+      };
+    }
+  }
+
+  // 2. Select the nearest official candidate by spatial distance
+  const nearest = candidates.find((c) => c.isNearest) || candidates[0];
+  const distText =
+    nearest.distanceMeters != null
+      ? ` (±${(nearest.distanceMeters / 1000).toFixed(1)} km dari titik)`
+      : '';
+
+  return {
+    selectedVillage: nearest.name,
+    explanation: `Wasit AI memilih '${nearest.name}' dari ${candidates.length} desa resmi Kemendagri di Kec. ${districtName} berdasarkan pusat desa terdekat${distText}.`,
+    confidenceScore: 95,
+  };
 }
 
 // Built-in intelligent heuristic engine
@@ -50,59 +242,35 @@ function runHeuristicEngine(
   address: AddressData,
   nearbyPlaces: NearbyPlace[],
   communityRTRW: CommunityRTRWContribution[],
-  userNotes: string
+  userNotes: string,
+  officialCandidates: OfficialVillageCandidate[],
+  refereeResult: {
+    selectedVillage: string;
+    explanation: string;
+    confidenceScore: number;
+    source: 'gemini' | 'smart_referee';
+  }
 ): AIAddressAnalysis {
   const jalan = address.jalan;
   let rt = address.rt;
   let rw = address.rw;
-  let kelurahan = address.kelurahan;
-  let kecamatan = address.kecamatan;
+  let kelurahan = refereeResult.selectedVillage || address.kelurahan;
+  const kecamatan = address.kecamatan;
   const kota = address.kota;
   const provinsi = address.provinsi;
   const kodePos = address.kodePos;
   let patokan = address.patokan;
 
-  let confidenceScore = 90;
-  const explanationParts: string[] = [];
+  let confidenceScore = refereeResult.confidenceScore;
+  const explanationParts: string[] = [refereeResult.explanation];
   let detectedFromPOIs: AIAddressAnalysis['detectedFromPOIs'] | undefined;
 
-  // 1. Detect if kelurahan is actually a road or building, and clean it!
-  const isRoadPattern = /^(jl\.?|jalan|gang|gg\.?|lorong|lrg\.?|boulevard|bulevar|avenue|ave|ruas|tol|perum|perumahan|komplek|komp\.?|blok)\b/i;
-  if (
-    kelurahan &&
-    (isRoadPattern.test(kelurahan) ||
-      (jalan && kelurahan.toLowerCase() === jalan.toLowerCase()) ||
-      (jalan && jalan.toLowerCase().includes(kelurahan.toLowerCase())))
-  ) {
-    explanationParts.push(`Membersihkan '${kelurahan}' dari kolom kelurahan/desa karena terdeteksi sebagai nama jalan.`);
-    kelurahan = '';
+  // Clean if kelurahan is identical to jalan
+  if (kelurahan && jalan && kelurahan.toLowerCase() === jalan.toLowerCase()) {
+    kelurahan = refereeResult.selectedVillage || '';
   }
 
-  // 2. Check and correct Kelurahan vs Kecamatan
-  const directional = /\b(utara|selatan|barat|timur|tengah|wetan|kidul|kulon)\b/i;
-  if (directional.test(kelurahan) && (!kecamatan || kecamatan === kota)) {
-    explanationParts.push(`Memperbaiki '${kelurahan}' yang sebelumnya terdeteksi sebagai kelurahan menjadi kecamatan.`);
-    kecamatan = kelurahan;
-    kelurahan = '';
-    confidenceScore += 5;
-  }
-
-  // 3. If kelurahan is empty, search nearbyPlaces for a Kelurahan / Desa office or public facility
-  if (!kelurahan && nearbyPlaces.length > 0) {
-    const kelurahanPOI = nearbyPlaces.find((p) =>
-      /\b(kelurahan|desa|balai\s+desa)\b/i.test(p.name)
-    );
-    if (kelurahanPOI) {
-      const match = kelurahanPOI.name.match(/\b(?:kelurahan|desa|balai\s+desa)\s+([a-zA-Z\s]+)/i);
-      if (match && match[1]) {
-        kelurahan = match[1].trim();
-        explanationParts.push(`Mendeteksi Kelurahan '${kelurahan}' dari fasilitas sekitar (${kelurahanPOI.name}).`);
-        confidenceScore += 5;
-      }
-    }
-  }
-
-  // 4. If RT/RW is empty, check nearby places or community
+  // 1. If RT/RW is empty, check nearby places or community
   if (!rt && !rw) {
     // Check nearby community data first
     if (communityRTRW.length > 0 && communityRTRW[0].rt && communityRTRW[0].rw) {
@@ -111,7 +279,7 @@ function runHeuristicEngine(
       explanationParts.push(
         `Mengisi RT ${rt} / RW ${rw} dari kontribusi warga sekitar (±${communityRTRW[0].distanceMeters}m).`
       );
-      confidenceScore += 5;
+      confidenceScore = Math.min(confidenceScore + 3, 99);
     } else {
       // Check nearby public facilities (schools, mosques, offices)
       const placeWithRTRW = nearbyPlaces.find((p) => p.detectedRTRW?.rt || p.detectedRTRW?.rw);
@@ -127,12 +295,12 @@ function runHeuristicEngine(
         explanationParts.push(
           `Mendeteksi RT ${rt} / RW ${rw} dari fasilitas publik terdekat: ${placeWithRTRW.name} (±${placeWithRTRW.distanceMeters}m).`
         );
-        confidenceScore += 5;
+        confidenceScore = Math.min(confidenceScore + 3, 99);
       }
     }
   }
 
-  // 5. Build optimized courier patokan from nearest landmark
+  // 2. Build optimized courier patokan from nearest landmark
   if (!patokan && nearbyPlaces.length > 0) {
     const topPOIs = nearbyPlaces.slice(0, 2);
     const landmarkNotes = topPOIs
@@ -174,14 +342,18 @@ function runHeuristicEngine(
     patokan,
     formattedAddress,
     confidenceScore: Math.min(confidenceScore, 99),
-    aiSource: 'heuristic_engine',
-    explanation:
-      explanationParts.length > 0
-        ? explanationParts.join(' ')
-        : 'Hierarki administrasi (Jalan, Kelurahan, Kecamatan, Kota) telah divalidasi dan disesuaikan standar pos logistik Indonesia.',
+    aiSource: refereeResult.source === 'gemini' ? 'gemini' : 'heuristic_engine',
+    explanation: explanationParts.join(' '),
     deliveryAdvice:
       'Gunakan format ini untuk memesan paket di Shopee atau Tokopedia. Pastikan memilih Kecamatan terlebih dahulu saat memasukkan alamat baru.',
     hierarchyVerified: true,
     detectedFromPOIs,
+    officialCandidates,
+    refereeDecision: {
+      selectedVillage: refereeResult.selectedVillage,
+      reason: refereeResult.explanation,
+      wasitSource: refereeResult.source,
+    },
+    hasServerKey: !!process.env.GEMINI_API_KEY,
   };
 }

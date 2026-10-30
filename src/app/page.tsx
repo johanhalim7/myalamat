@@ -16,7 +16,14 @@ import CommunityRTRWBanner from '@/components/CommunityRTRWBanner';
 import ContributeRTRWModal from '@/components/ContributeRTRWModal';
 import NearbyPlacesSection from '@/components/NearbyPlacesSection';
 import AIAddressModal from '@/components/AIAddressModal';
-import { AddressData, SavedAddress, NominatimReverseResponse, CommunityRTRWContribution, NearbyPlace } from '@/types/address';
+import {
+  AddressData,
+  SavedAddress,
+  NominatimReverseResponse,
+  CommunityRTRWContribution,
+  NearbyPlace,
+  OfficialVillageCandidate,
+} from '@/types/address';
 import { parseNominatimToAddress, formatSingleLineAddress } from '@/utils/addressParser';
 import { AlertCircle, Sparkles, Navigation, Info, Wand2, ShoppingBag, Users, Brain } from 'lucide-react';
 
@@ -99,6 +106,51 @@ export default function HomePage() {
     }
   }, []);
 
+  // Fetch Official Kemendagri Villages for District
+  const fetchOfficialVillages = useCallback(
+    async (parsedAddr: AddressData, lat: number, lon: number) => {
+      if (!parsedAddr.kecamatan) return;
+      try {
+        const query = new URLSearchParams({
+          district: parsedAddr.kecamatan,
+          regency: parsedAddr.kota,
+          province: parsedAddr.provinsi,
+          lat: lat.toString(),
+          lon: lon.toString(),
+        });
+        const res = await fetch(`/api/official-villages?${query.toString()}`);
+        if (res.ok) {
+          const data = await res.json();
+          const villages: OfficialVillageCandidate[] = data.villages || [];
+          if (villages.length > 0) {
+            setAddress((prev) => {
+              if (!prev) return prev;
+              const shouldUpdateKelurahan =
+                !prev.kelurahan ||
+                prev.kelurahan.toLowerCase() === prev.kecamatan.toLowerCase() ||
+                prev.kelurahan.toLowerCase() === prev.jalan.toLowerCase();
+
+              const chosenKelurahan = shouldUpdateKelurahan
+                ? data.nearestVillage?.name || villages[0].name
+                : prev.kelurahan;
+
+              const updated: AddressData = {
+                ...prev,
+                kelurahan: chosenKelurahan,
+                officialVillages: villages,
+              };
+              updated.formattedAddress = formatSingleLineAddress(updated);
+              return updated;
+            });
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching official villages:', err);
+      }
+    },
+    []
+  );
+
   // Reverse Geocode Function with enhanced Indonesian hierarchy parsing
   const fetchAddressForCoords = useCallback(
     async (lat: number, lon: number, acc: number | null = null) => {
@@ -113,9 +165,10 @@ export default function HomePage() {
         const parsed = parseNominatimToAddress(data, lat, lon, acc);
         setAddress(parsed);
 
-        // Concurrently fetch community RT/RW and nearby facilities
+        // Concurrently fetch community RT/RW, nearby facilities, and official Kemendagri villages
         fetchCommunityRTRW(lat, lon);
         fetchNearbyPlaces(lat, lon);
+        fetchOfficialVillages(parsed, lat, lon);
       } catch (err: unknown) {
         console.error('Geocoding error:', err);
         setErrorMessage(
@@ -125,8 +178,20 @@ export default function HomePage() {
         setIsGeocoding(false);
       }
     },
-    [fetchCommunityRTRW, fetchNearbyPlaces]
+    [fetchCommunityRTRW, fetchNearbyPlaces, fetchOfficialVillages]
   );
+
+  const handleSelectOfficialVillage = useCallback((villageName: string) => {
+    setAddress((prev) => {
+      if (!prev) return prev;
+      const updated: AddressData = {
+        ...prev,
+        kelurahan: villageName,
+      };
+      updated.formattedAddress = formatSingleLineAddress(updated);
+      return updated;
+    });
+  }, []);
 
   // Initial geocode for default coords
   useEffect(() => {
@@ -427,6 +492,7 @@ export default function HomePage() {
               onOpenShare={() => setIsShareOpen(true)}
               onOpenSmartParser={() => setIsSmartParserOpen(true)}
               onOpenAIModal={() => setIsAIModalOpen(true)}
+              onSelectVillage={handleSelectOfficialVillage}
             />
           </div>
         </div>

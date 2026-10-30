@@ -16,6 +16,7 @@ import {
   ExternalLink,
   Wand2,
   Brain,
+  Sparkles,
 } from 'lucide-react';
 import { formatFormalAddress, getGoogleMapsUrl } from '@/utils/addressParser';
 
@@ -28,6 +29,7 @@ interface AddressCardProps {
   onOpenShare: () => void;
   onOpenSmartParser: () => void;
   onOpenAIModal?: () => void;
+  onSelectVillage?: (villageName: string) => void;
 }
 
 export default function AddressCard({
@@ -39,6 +41,7 @@ export default function AddressCard({
   onOpenShare,
   onOpenSmartParser,
   onOpenAIModal,
+  onSelectVillage,
 }: AddressCardProps) {
   const [copiedType, setCopiedType] = useState<string | null>(null);
 
@@ -296,6 +299,54 @@ export default function AddressCard({
               Patokan / Petunjuk Kurir:
             </span>
             <span className="text-slate-800 dark:text-slate-200 font-medium">{address.patokan}</span>
+          </div>
+        )}
+
+        {/* Jaring Pengaman Manual: Daftar Desa/Kelurahan Resmi Kemendagri */}
+        {address?.officialVillages && address.officialVillages.length > 0 && (
+          <div className="p-3 bg-gradient-to-br from-indigo-50/80 to-violet-50/60 dark:from-indigo-950/40 dark:to-violet-950/30 rounded-2xl border border-indigo-100 dark:border-indigo-900/60 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-1">
+              <span className="text-[11px] font-bold text-indigo-950 dark:text-indigo-200 flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                Desa Resmi Kemendagri di Kec. {address.kecamatan || 'ini'} ({address.officialVillages.length}):
+              </span>
+              <span className="text-[10px] text-slate-500 dark:text-slate-400">
+                Ketuk desa tetangga untuk ganti instan
+              </span>
+            </div>
+
+            <div className="flex flex-wrap gap-1.5 pt-0.5">
+              {address.officialVillages.map((v) => {
+                const isSelected =
+                  (address.kelurahan || '').toLowerCase().trim() === v.name.toLowerCase().trim();
+                return (
+                  <button
+                    key={v.name}
+                    type="button"
+                    onClick={() => onSelectVillage && onSelectVillage(v.name)}
+                    className={`px-2.5 py-1 rounded-xl text-xs font-semibold transition-all flex items-center gap-1 active:scale-95 ${
+                      isSelected
+                        ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-300 dark:ring-indigo-600'
+                        : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-indigo-100/70 dark:hover:bg-indigo-900/50 border border-slate-200 dark:border-slate-700'
+                    }`}
+                  >
+                    {isSelected && <Check className="w-3 h-3 text-white" />}
+                    <span>{v.name}</span>
+                    {v.distanceMeters != null && (
+                      <span
+                        className={`text-[10px] font-normal ${
+                          isSelected ? 'text-indigo-100' : 'text-slate-400'
+                        }`}
+                      >
+                        {v.distanceMeters < 100
+                          ? '±0km'
+                          : `±${(v.distanceMeters / 1000).toFixed(1)}km`}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         )}
       </div>
